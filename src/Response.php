@@ -9,11 +9,105 @@ namespace Dis\FictionX\Router;
 
 final class Response
 {
-    /**
-     * Placeholder response DTO; will hold status, headers, and body.
-     * SECURITY: Output must be sanitized and headers validated in implementation.
-     */
-    public function __construct()
+    private int $status;
+    /** @var array<string, string> */
+    private array $headers;
+    private string $body;
+
+    public function __construct(string $body = '', int $status = 200, array $headers = [])
     {
+        $this->status = $status;
+        $this->headers = $this->sanitizeHeaders($headers);
+        $this->body = $body;
+    }
+
+    public static function text(string $body, int $status = 200, array $headers = []): self
+    {
+        $headers['Content-Type'] = $headers['Content-Type'] ?? 'text/plain; charset=UTF-8';
+        return new self($body, $status, $headers);
+    }
+
+    public static function json($data, int $status = 200, array $headers = []): self
+    {
+        $headers['Content-Type'] = $headers['Content-Type'] ?? 'application/json; charset=UTF-8';
+        return new self(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), $status, $headers);
+    }
+
+    public static function notFound(string $body = 'Not Found'): self
+    {
+        return self::text($body, 404);
+    }
+
+    public static function methodNotAllowed(string $body = 'Method Not Allowed'): self
+    {
+        return self::text($body, 405);
+    }
+
+    public function status(): int
+    {
+        return $this->status;
+    }
+
+    /** @return array<string, string> */
+    public function headers(): array
+    {
+        return $this->headers;
+    }
+
+    public function body(): string
+    {
+        return $this->body;
+    }
+
+    public function withHeader(string $name, string $value): self
+    {
+        $clone = clone $this;
+        $clone->headers[$this->normalizeHeaderName($name)] = trim($value);
+        return $clone;
+    }
+
+    public function withStatus(int $status): self
+    {
+        $clone = clone $this;
+        $clone->status = $status;
+        return $clone;
+    }
+
+    public function withBody(string $body): self
+    {
+        $clone = clone $this;
+        $clone->body = $body;
+        return $clone;
+    }
+
+    public function send(): void
+    {
+        http_response_code($this->status);
+        foreach ($this->headers as $name => $value) {
+            // Prevent header injection by stripping CR/LF
+            $safeName = str_replace(["\r", "\n"], '', $name);
+            $safeValue = str_replace(["\r", "\n"], '', $value);
+            header($safeName . ': ' . $safeValue, true);
+        }
+        echo $this->body;
+    }
+
+    private function sanitizeHeaders(array $headers): array
+    {
+        $clean = [];
+        foreach ($headers as $name => $value) {
+            if (!is_string($name)) {
+                continue;
+            }
+            $normalized = $this->normalizeHeaderName($name);
+            $clean[$normalized] = is_string($value) ? trim($value) : (string)$value;
+        }
+        return $clean;
+    }
+
+    private function normalizeHeaderName(string $name): string
+    {
+        $name = trim($name);
+        return str_replace(' ', '-', ucwords(strtolower(str_replace(['_', '-'], ' ', $name))));
     }
 }

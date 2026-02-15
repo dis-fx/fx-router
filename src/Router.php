@@ -9,11 +9,183 @@ namespace Dis\FictionX\Router;
 
 final class Router
 {
-    /**
-     * Placeholder router. Will register routes and middleware in subsequent commit.
-     * SECURITY: Keep zero third-party dependencies; enforce traversal/method validation in implementation.
-     */
-    public function __construct()
+    /** @var array<int, array{method:string,path:string,handler:callable,middleware:array}> */
+    private array $routes = [];
+
+    /** @var array<int, callable> */
+    private array $globalMiddleware = [];
+
+    public function __construct(array $globalMiddleware = [])
     {
+        foreach ($globalMiddleware as $mw) {
+            if (is_callable($mw)) {
+                $this->globalMiddleware[] = $mw;
+            }
+        }
+    }
+
+    public function middleware(callable $middleware): self
+    {
+        $this->globalMiddleware[] = $middleware;
+        return $this;
+    }
+
+    public function get(string $path, callable $handler, array $middleware = []): self
+    {
+        return $this->addRoute('GET', $path, $handler, $middleware);
+    }
+
+    public function post(string $path, callable $handler, array $middleware = []): self
+    {
+        return $this->addRoute('POST', $path, $handler, $middleware);
+    }
+
+    public function put(string $path, callable $handler, array $middleware = []): self
+    {
+        return $this->addRoute('PUT', $path, $handler, $middleware);
+    }
+
+    public function delete(string $path, callable $handler, array $middleware = []): self
+    {
+        return $this->addRoute('DELETE', $path, $handler, $middleware);
+    }
+
+    public function patch(string $path, callable $handler, array $middleware = []): self
+    {
+        return $this->addRoute('PATCH', $path, $handler, $middleware);
+    }
+
+    public function addRoute(string $method, string $path, callable $handler, array $middleware = []): self
+    {
+        $normalizedPath = $this->normalizePath($path);
+        $this->routes[] = [
+            'method' => strtoupper($method),
+            'path' => $normalizedPath,
+            'handler' => $handler,
+            'middleware' => array_values(array_filter($middleware, 'is_callable')),
+        ];
+        return $this;
+    }
+
+    public function dispatch(Request $request): Response
+    {
+        $matched = null;
+        $params = [];
+        $allowedMethods = [];
+
+        foreach ($this->routes as $route) {
+            $routeParams = [];
+            if ($this->matchPath($request->path(), $route['path'], $routeParams)) {
+                $allowedMethods[] = $route['method'];
+                if ($route['method'] === $request->method()) {
+                    $matched = [$route, $routeParams];
+                    break;
+                }
+            }
+        }
+
+        if ($matched === null) {
+            if ($allowedMethods) {
+                return Response::methodNotAllowed();
+            }
+            return Response::notFound();
+        }
+
+        [$route, $params] = $matched;
+
+        $pipeline = array_merge(
+            $this->globalMiddleware,
+            $route['middleware'],
+            [function (Request $req) use ($route, $params): Response {
+                $handler = $route['handler'];
+                $result = $handler($req, $params);
+                return $this->normalizeResponse($result);
+            }]
+        );
+
+        $runner = array_reduce(
+            array_reverse($pipeline),
+            function ($next, $middleware) {
+                return function (Request $req) use ($middleware, $next) {
+                    return $middleware($req, $next);
+                };
+            },
+            function (Request $req): Response {
+                // Fallback should never run; pipeline final handler defined above
+                return Response::notFound();
+            }
+        );
+
+        return $runner($request);
+    }
+
+    public function run(): void
+    {
+        $request = Request::fromGlobals();
+        $response = $this->dispatch($request);
+        $response->send();
+    }
+
+    private function normalizePath(string $path): string
+    {
+        $trimmed = '/' . ltrim($path, '/');
+        $normalized = preg_replace('#/+#', '/', $trimmed) ?: '/';
+        if (preg_match('#\.{2}[\\/]#', $normalized)) {
+            return '/';
+        }
+        return $normalized === '' ? '/' : $normalized;
+    }
+
+    private function matchPath(string $actual, string $pattern, array &$params): bool
+    {
+        $params = [];
+        $aParts = explode('/', trim($actual, '/'));
+        $pParts = explode('/', trim($pattern, '/'));
+
+        if (count($aParts) !== count($pParts)) {
+            return false;
+        }
+
+        foreach ($pParts as $index => $part) {
+            $actualPart = $aParts[$index];
+            if ($part === '') {
+                if ($actualPart !== '') {
+                    return false;
+                }
+                continue;
+            }
+
+            if ($part[0] === '{' && substr($part, -1) === '}') {
+                $key = trim(substr($part, 1, -1));
+                if ($key === '') {
+                    return false;
+                }
+                $params[$key] = $actualPart;
+                continue;
+            }
+
+            if ($part !== $actualPart) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function normalizeResponse($result): Response
+    {
+        if ($result instanceof Response) {
+            return $result;
+        }
+
+        if (is_string($result)) {
+            return Response::text($result);
+        }
+
+        if (is_array($result) || is_object($result)) {
+            return Response::json($result);
+        }
+
+        return Response::text('');
     }
 }

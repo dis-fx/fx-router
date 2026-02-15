@@ -9,11 +9,100 @@ namespace Dis\FictionX\Router;
 
 final class Request
 {
+    private string $method;
+    private string $path;
+    private array $query;
+    private array $body;
+    private array $headers;
+
     /**
-     * Placeholder request DTO; will encapsulate method, path, headers, query, and body.
-     * SECURITY: No superglobals will be exposed directly; sanitize inputs in implementation.
+     * @param string $method  Uppercase HTTP method
+     * @param string $path    Normalized path starting with '/'
+     * @param array  $query   Query parameters (sanitized keys)
+     * @param array  $body    Parsed body (sanitized keys)
+     * @param array  $headers Normalized headers (sanitized keys)
      */
-    public function __construct()
+    public function __construct(string $method, string $path, array $query = [], array $body = [], array $headers = [])
     {
+        $this->method = strtoupper($method);
+        $this->path = $this->normalizePath($path);
+        $this->query = $this->sanitizeKeys($query);
+        $this->body = $this->sanitizeKeys($body);
+        $this->headers = $this->sanitizeKeys($headers);
+    }
+
+    public static function fromGlobals(): self
+    {
+        $method = isset($_SERVER['REQUEST_METHOD']) ? (string)$_SERVER['REQUEST_METHOD'] : 'GET';
+        $uri = isset($_SERVER['REQUEST_URI']) ? (string)$_SERVER['REQUEST_URI'] : '/';
+        $path = explode('?', $uri, 2)[0] ?? '/';
+
+        $headers = [];
+        foreach ($_SERVER as $k => $v) {
+            if (strpos($k, 'HTTP_') === 0) {
+                $name = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($k, 5)))));
+                $headers[$name] = is_string($v) ? trim($v) : $v;
+            }
+        }
+
+        return new self(
+            $method,
+            $path,
+            $_GET ?? [],
+            $_POST ?? [],
+            $headers
+        );
+    }
+
+    public function method(): string
+    {
+        return $this->method;
+    }
+
+    public function path(): string
+    {
+        return $this->path;
+    }
+
+    public function query(): array
+    {
+        return $this->query;
+    }
+
+    public function body(): array
+    {
+        return $this->body;
+    }
+
+    public function headers(): array
+    {
+        return $this->headers;
+    }
+
+    public function header(string $name, $default = null): mixed
+    {
+        $normalized = str_replace(' ', '-', ucwords(strtolower(str_replace(['_', '-'], ' ', $name))));
+        return $this->headers[$normalized] ?? $default;
+    }
+
+    private function normalizePath(string $path): string
+    {
+        $trimmed = '/' . ltrim($path, '/');
+        // Collapse multiple slashes
+        $trimmed = preg_replace('#/+#', '/', $trimmed) ?: '/';
+        return $trimmed === '' ? '/' : $trimmed;
+    }
+
+    private function sanitizeKeys(array $data): array
+    {
+        $clean = [];
+        foreach ($data as $k => $v) {
+            $key = is_string($k) ? trim($k) : $k;
+            if ($key === '') {
+                continue;
+            }
+            $clean[$key] = $v;
+        }
+        return $clean;
     }
 }
