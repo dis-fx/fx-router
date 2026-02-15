@@ -8,7 +8,7 @@
         "email": "framework@digitalintelligentsolutions.om"
     },
     "require": {
-        "dis-fx/fx-nucleus": "^0.1.0"
+        "dis-fx/fx-nucleus": "^0.1.0|dev-master"
     },
     "require-dev": {},
     "autoload": {
