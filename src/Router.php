@@ -69,6 +69,9 @@ final class Router
 
     public function dispatch(Request $request): Response
     {
+        $requestMethod = $request->method();
+        $effectiveMethod = $requestMethod === 'HEAD' ? 'GET' : $requestMethod;
+
         $matched = null;
         $params = [];
         $allowedMethods = [];
@@ -77,7 +80,7 @@ final class Router
             $routeParams = [];
             if ($this->matchPath($request->path(), $route['path'], $routeParams)) {
                 $allowedMethods[] = $route['method'];
-                if ($route['method'] === $request->method()) {
+                if ($route['method'] === $effectiveMethod) {
                     $matched = [$route, $routeParams];
                     break;
                 }
@@ -86,7 +89,13 @@ final class Router
 
         if ($matched === null) {
             if ($allowedMethods) {
-                return Response::methodNotAllowed();
+                $allow = $this->buildAllowHeader($allowedMethods);
+
+                if ($requestMethod === 'OPTIONS') {
+                    return Response::text('', 204, ['Allow' => $allow]);
+                }
+
+                return Response::methodNotAllowed()->withHeader('Allow', $allow);
             }
             return Response::notFound();
         }
@@ -116,7 +125,13 @@ final class Router
             }
         );
 
-        return $runner($request);
+        $response = $runner($request);
+
+        if ($requestMethod === 'HEAD') {
+            return $response->withBody('');
+        }
+
+        return $response;
     }
 
     public function run(): void
@@ -187,5 +202,29 @@ final class Router
         }
 
         return Response::text('');
+    }
+
+    private function buildAllowHeader(array $allowedMethods): string
+    {
+        $unique = [];
+        foreach ($allowedMethods as $m) {
+            $m = strtoupper((string)$m);
+            if ($m === '') {
+                continue;
+            }
+            $unique[$m] = true;
+        }
+
+        // HEAD is implicitly allowed when GET is present.
+        if (isset($unique['GET'])) {
+            $unique['HEAD'] = true;
+        }
+
+        // OPTIONS should be allowed for matched paths.
+        $unique['OPTIONS'] = true;
+
+        $methods = array_keys($unique);
+        sort($methods);
+        return implode(', ', $methods);
     }
 }
