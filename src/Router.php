@@ -15,6 +15,12 @@ final class Router
     /** @var array<int, callable> */
     private array $globalMiddleware = [];
 
+    /** @var array<int, array{prefix:string,middleware:array}> */
+    private array $groupStack = [['prefix' => '', 'middleware' => []]];
+
+    /** @var array<string, array{path:string,method:string}> */
+    private array $namedRoutes = [];
+
     public function __construct(array $globalMiddleware = [])
     {
         foreach ($globalMiddleware as $mw) {
@@ -30,41 +36,103 @@ final class Router
         return $this;
     }
 
-    public function get(string $path, callable $handler, array $middleware = []): self
+    public function get(string $path, callable $handler, array $middleware = [], ?string $name = null): self
     {
-        return $this->addRoute('GET', $path, $handler, $middleware);
+        return $this->addRoute('GET', $path, $handler, $middleware, $name);
     }
 
-    public function post(string $path, callable $handler, array $middleware = []): self
+    public function post(string $path, callable $handler, array $middleware = [], ?string $name = null): self
     {
-        return $this->addRoute('POST', $path, $handler, $middleware);
+        return $this->addRoute('POST', $path, $handler, $middleware, $name);
     }
 
-    public function put(string $path, callable $handler, array $middleware = []): self
+    public function put(string $path, callable $handler, array $middleware = [], ?string $name = null): self
     {
-        return $this->addRoute('PUT', $path, $handler, $middleware);
+        return $this->addRoute('PUT', $path, $handler, $middleware, $name);
     }
 
-    public function delete(string $path, callable $handler, array $middleware = []): self
+    public function delete(string $path, callable $handler, array $middleware = [], ?string $name = null): self
     {
-        return $this->addRoute('DELETE', $path, $handler, $middleware);
+        return $this->addRoute('DELETE', $path, $handler, $middleware, $name);
     }
 
-    public function patch(string $path, callable $handler, array $middleware = []): self
+    public function patch(string $path, callable $handler, array $middleware = [], ?string $name = null): self
     {
-        return $this->addRoute('PATCH', $path, $handler, $middleware);
+        return $this->addRoute('PATCH', $path, $handler, $middleware, $name);
     }
 
-    public function addRoute(string $method, string $path, callable $handler, array $middleware = []): self
+    public function addRoute(string $method, string $path, callable $handler, array $middleware = [], ?string $name = null): self
     {
-        $normalizedPath = $this->normalizePath($path);
+        $group = $this->groupStack[count($this->groupStack) - 1];
+        $groupPrefix = $group['prefix'];
+        $combinedMiddleware = array_merge($group['middleware'], array_values(array_filter($middleware, 'is_callable')));
+
+        $normalizedPath = $this->normalizePath($groupPrefix . '/' . ltrim($path, '/'));
         $this->routes[] = [
             'method' => strtoupper($method),
             'path' => $normalizedPath,
             'handler' => $handler,
-            'middleware' => array_values(array_filter($middleware, 'is_callable')),
+            'middleware' => $combinedMiddleware,
         ];
+
+        if ($name !== null && $name !== '') {
+            $this->namedRoutes[$name] = [
+                'method' => strtoupper($method),
+                'path' => $normalizedPath,
+            ];
+        }
         return $this;
+    }
+
+    /**
+     * Group routes with optional prefix and middleware.
+     * @param array{prefix?:string,middleware?:array} $options
+     */
+    public function group(array $options, callable $callback): self
+    {
+        $prefix = $options['prefix'] ?? '';
+        $middleware = $options['middleware'] ?? [];
+
+        $current = $this->groupStack[count($this->groupStack) - 1];
+        $mergedPrefix = $this->normalizePath($current['prefix'] . '/' . ltrim($prefix, '/'));
+        $mergedMiddleware = array_merge($current['middleware'], array_values(array_filter($middleware, 'is_callable')));
+
+        $this->groupStack[] = [
+            'prefix' => $mergedPrefix === '/' ? '' : $mergedPrefix,
+            'middleware' => $mergedMiddleware,
+        ];
+
+        try {
+            $callback($this);
+        } finally {
+            array_pop($this->groupStack);
+        }
+
+        return $this;
+    }
+
+    public function urlFor(string $name, array $params = []): string
+    {
+        if (!isset($this->namedRoutes[$name])) {
+            throw new \InvalidArgumentException("Route name not found: {$name}");
+        }
+
+        $route = $this->namedRoutes[$name];
+        $path = $route['path'];
+
+        foreach ($params as $key => $value) {
+            $token = '{' . $key . '}';
+            if (str_contains($path, $token)) {
+                $path = str_replace($token, rawurlencode((string)$value), $path);
+                unset($params[$key]);
+            }
+        }
+
+        if (!empty($params)) {
+            $path .= (str_contains($path, '?') ? '&' : '?') . http_build_query($params);
+        }
+
+        return $this->normalizePath($path);
     }
 
     public function dispatch(Request $request): Response

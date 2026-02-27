@@ -100,4 +100,33 @@ $T->run('HEAD behaves like GET but empty body', function () use ($T) {
     $T->assertSame('', $res->body());
 });
 
+$T->run('Route groups apply prefix and middleware', function () use ($T) {
+    $router = new Router();
+
+    $flag = false;
+    $mw = function (Request $r, callable $next) use (&$flag) {
+        $flag = true;
+        return $next($r);
+    };
+
+    $router->group(['prefix' => '/api', 'middleware' => [$mw]], function (Router $r) {
+        $r->get('/ping', fn(Request $req) => Response::text('pong'));
+    });
+
+    $res = $router->dispatch(new Request('GET', '/api/ping'));
+
+    $T->assertSame(200, $res->status());
+    $T->assertSame('pong', $res->body());
+    $T->assertTrue($flag, 'Group middleware did not run');
+});
+
+$T->run('Named routes generate URLs', function () use ($T) {
+    $router = new Router();
+    $router->get('/user/{id}', fn(Request $r) => Response::text('u'), [], 'user.show');
+
+    $url = $router->urlFor('user.show', ['id' => 42, 'tab' => 'settings']);
+
+    $T->assertSame('/user/42?tab=settings', $url);
+});
+
 exit($T->summary());
